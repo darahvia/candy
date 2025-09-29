@@ -46,6 +46,11 @@
             color: #2196F3;
             margin: 20px 0;
         }
+        #myPoison {
+            font-size: 14px;
+            color: #666;
+            margin: 10px 0;
+        }
         #grid {
             display: grid;
             grid-template-columns: repeat(8, 50px);
@@ -73,6 +78,9 @@
         .candy.poisoned {
             background: #ff6b6b;
         }
+        .candy.myPoison {
+            background: #fff59d;
+        }
         .candy.disabled {
             cursor: not-allowed;
             opacity: 0.5;
@@ -93,6 +101,7 @@
     
     <div id="game">
         <div id="gameCode"></div>
+        <div id="myPoison"></div>
         <div id="status"></div>
         <div id="grid"></div>
         <button id="backBtn">Back to Menu</button>
@@ -121,6 +130,7 @@
         const grid = document.getElementById('grid');
         const status = document.getElementById('status');
         const gameCodeDisplay = document.getElementById('gameCode');
+        const myPoisonDisplay = document.getElementById('myPoison');
         const createBtn = document.getElementById('createBtn');
         const joinBtn = document.getElementById('joinBtn');
         const joinInput = document.getElementById('joinInput');
@@ -129,6 +139,7 @@
         let currentGameCode = null;
         let playerRole = null;
         let settingPoison = false;
+        let myPoisonIndex = -1;
 
         function generateGameCode() {
             return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -153,11 +164,20 @@
                 candy.className = 'candy';
                 candy.textContent = '🍬';
                 
+                // Show my own poison with yellow highlight
+                if (i === myPoisonIndex && !gameState.gameOver) {
+                    candy.classList.add('myPoison');
+                }
+                
                 if (gameState.takenCandies && gameState.takenCandies[i]) {
                     candy.classList.add('taken');
-                    if (gameState.revealed && i === gameState.poisonedIndex) {
-                        candy.classList.add('poisoned');
-                        candy.textContent = '☠️';
+                    
+                    // Reveal which poison was hit when game is over
+                    if (gameState.gameOver) {
+                        if (i === gameState.poison1 || i === gameState.poison2) {
+                            candy.classList.add('poisoned');
+                            candy.textContent = '☠️';
+                        }
                     }
                 }
                 
@@ -177,27 +197,73 @@
                 if (!gameState) return;
 
                 if (settingPoison) {
-                    update(gameRef, {
-                        poisonedIndex: index,
-                        gameStarted: true,
-                        currentPlayer: 2
-                    });
-                    settingPoison = false;
-                    status.textContent = 'Poison set! Waiting for Player 2...';
-                } else if (!gameState.gameOver && gameState.currentPlayer === playerRole) {
+                    // Setting poison phase
+                    if (gameState.takenCandies && gameState.takenCandies[index]) {
+                        alert('That candy is already taken! Choose another.');
+                        return;
+                    }
+                    
+                    if (playerRole === 1) {
+                        if (gameState.poison2 === index) {
+                            alert('Player 2 already chose that candy! Pick another.');
+                            return;
+                        }
+                        myPoisonIndex = index;
+                        update(gameRef, {
+                            poison1: index,
+                            player1Ready: true
+                        });
+                        settingPoison = false;
+                        myPoisonDisplay.textContent = `Your poison: Candy #${index + 1}`;
+                    } else {
+                        if (gameState.poison1 === index) {
+                            alert('Player 1 already chose that candy! Pick another.');
+                            return;
+                        }
+                        myPoisonIndex = index;
+                        update(gameRef, {
+                            poison2: index,
+                            player2Ready: true
+                        });
+                        settingPoison = false;
+                        myPoisonDisplay.textContent = `Your poison: Candy #${index + 1}`;
+                        
+                        // Start game when both players ready
+                        if (gameState.player1Ready) {
+                            update(gameRef, {
+                                gameStarted: true,
+                                currentPlayer: 1
+                            });
+                        }
+                    }
+                } else if (gameState.gameStarted && !gameState.gameOver && gameState.currentPlayer === playerRole) {
+                    // Playing phase
                     if (gameState.takenCandies && gameState.takenCandies[index]) return;
                     
                     const takenCandies = gameState.takenCandies || {};
                     takenCandies[index] = true;
                     
-                    if (index === gameState.poisonedIndex) {
+                    const takenCount = Object.keys(takenCandies).length;
+                    
+                    // Check if hit a poison
+                    if (index === gameState.poison1 || index === gameState.poison2) {
                         update(gameRef, {
                             takenCandies: takenCandies,
                             gameOver: true,
                             winner: playerRole === 1 ? 2 : 1,
-                            revealed: true
+                            loser: playerRole
                         });
-                    } else {
+                    } 
+                    // Check if all non-poison candies are taken (38 candies taken, 2 poisons left)
+                    else if (takenCount >= 38) {
+                        update(gameRef, {
+                            takenCandies: takenCandies,
+                            gameOver: true,
+                            winner: playerRole,
+                            loser: playerRole === 1 ? 2 : 1
+                        });
+                    }
+                    else {
                         update(gameRef, {
                             takenCandies: takenCandies,
                             currentPlayer: playerRole === 1 ? 2 : 1
@@ -214,18 +280,20 @@
             
             const gameRef = ref(db, 'games/' + currentGameCode);
             set(gameRef, {
-                poisonedIndex: -1,
+                poison1: -1,
+                poison2: -1,
                 currentPlayer: 1,
                 takenCandies: {},
+                player1Ready: false,
+                player2Ready: false,
                 gameStarted: false,
-                gameOver: false,
-                revealed: false
+                gameOver: false
             });
             
             menu.style.display = 'none';
             game.style.display = 'block';
             gameCodeDisplay.textContent = 'Game Code: ' + currentGameCode;
-            status.textContent = 'You are Player 1. Click a candy to poison it.';
+            status.textContent = 'You are Player 1. Click a candy to poison it (secretly).';
             createGrid();
             
             const gameRef2 = ref(db, 'games/' + currentGameCode);
@@ -236,13 +304,21 @@
                 updateGridFromState(gameState);
                 
                 if (gameState.gameOver) {
-                    status.textContent = `Game Over! Player ${gameState.winner} wins!`;
-                } else if (!gameState.gameStarted) {
-                    status.textContent = 'You are Player 1. Click a candy to poison it.';
-                } else if (gameState.currentPlayer === playerRole) {
-                    status.textContent = 'Your turn!';
-                } else {
-                    status.textContent = 'Waiting for Player ' + gameState.currentPlayer + '...';
+                    if (gameState.winner === playerRole) {
+                        status.textContent = `You win! Player ${gameState.loser} picked a poison!`;
+                    } else {
+                        status.textContent = `You lose! You picked a poison!`;
+                    }
+                } else if (!gameState.player1Ready) {
+                    status.textContent = 'Click a candy to poison it (secretly).';
+                } else if (!gameState.player2Ready) {
+                    status.textContent = 'Waiting for Player 2 to set their poison...';
+                } else if (gameState.gameStarted) {
+                    if (gameState.currentPlayer === playerRole) {
+                        status.textContent = 'Your turn! Pick a candy (avoid poisons).';
+                    } else {
+                        status.textContent = 'Waiting for Player ' + gameState.currentPlayer + '...';
+                    }
                 }
             });
         });
@@ -253,6 +329,7 @@
             
             currentGameCode = code;
             playerRole = 2;
+            settingPoison = true;
             
             const gameRef = ref(db, 'games/' + currentGameCode);
             onValue(gameRef, (snapshot) => {
@@ -265,29 +342,47 @@
                 menu.style.display = 'none';
                 game.style.display = 'block';
                 gameCodeDisplay.textContent = 'Game Code: ' + currentGameCode;
+                status.textContent = 'You are Player 2. Click a candy to poison it (secretly).';
                 createGrid();
                 updateGridFromState(gameState);
                 
-                if (gameState.gameOver) {
-                    status.textContent = `Game Over! Player ${gameState.winner} wins!`;
-                } else if (!gameState.gameStarted) {
-                    status.textContent = 'Waiting for Player 1 to set poison...';
-                } else if (gameState.currentPlayer === playerRole) {
-                    status.textContent = 'Your turn!';
-                } else {
-                    status.textContent = 'Waiting for Player ' + gameState.currentPlayer + '...';
-                }
-            });
+                onValue(gameRef, (snapshot) => {
+                    const gameState = snapshot.val();
+                    if (!gameState) return;
+                    
+                    updateGridFromState(gameState);
+                    
+                    if (gameState.gameOver) {
+                        if (gameState.winner === playerRole) {
+                            status.textContent = `You win! Player ${gameState.loser} picked a poison!`;
+                        } else {
+                            status.textContent = `You lose! You picked a poison!`;
+                        }
+                    } else if (!gameState.player2Ready) {
+                        status.textContent = 'Click a candy to poison it (secretly).';
+                    } else if (!gameState.gameStarted) {
+                        status.textContent = 'Waiting for game to start...';
+                    } else {
+                        if (gameState.currentPlayer === playerRole) {
+                            status.textContent = 'Your turn! Pick a candy (avoid poisons).';
+                        } else {
+                            status.textContent = 'Waiting for Player ' + gameState.currentPlayer + '...';
+                        }
+                    }
+                });
+            }, { onlyOnce: true });
         });
 
         backBtn.addEventListener('click', () => {
             currentGameCode = null;
             playerRole = null;
             settingPoison = false;
+            myPoisonIndex = -1;
             menu.style.display = 'block';
             game.style.display = 'none';
             joinInput.value = '';
+            myPoisonDisplay.textContent = '';
         });
     </script>
 </body>
-</html>
+</html
